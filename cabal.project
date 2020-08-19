@@ -1,0 +1,9 @@
+packages: .
+
+source-repository-package
+  type: git
+  location: https://github.com/juspay/beam.git
+  tag: 47f62de4cbfafe13891846ef795609b6f8050729
+  subdir: beam-core
+  --sha256:1w3iahns22ylccs0ka064ipajxkq52s2vcwsbw56zfrp0qnq0kn2
+

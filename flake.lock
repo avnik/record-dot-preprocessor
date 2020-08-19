@@ -1,0 +1,57 @@
+{
+  "nodes": {
+    "haskell-nix": {
+      "locked": {
+        "lastModified": 1597799920,
+        "narHash": "sha256-7fokKJLv0l21sgFAdy/nYpW0wjQVOS/Hm6gq6jtazIk=",
+        "type": "git",
+        "url": "file:///home/avn/nixos/haskell.nix"
+      },
+      "original": {
+        "owner": "input-output-hk",
+        "repo": "haskell.nix",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1597688451,
+        "narHash": "sha256-x1n+hemHf/0Xl6Po72YSyob/n5h8P72vYOw49qy82uU=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "eb8080d979b5d3271468a0287ca893a60e9de16a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "release-20.03",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "haskell-nix": "haskell-nix",
+        "nixpkgs": "nixpkgs",
+        "utils": "utils"
+      }
+    },
+    "utils": {
+      "locked": {
+        "lastModified": 1597053966,
+        "narHash": "sha256-f9lbPS/GJ1His8fsDqM6gfa8kSqREU4eKiMCS5hrKg4=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "ec20f52e2ff61e9c36c2b894b62fc1b4bd04c71b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
