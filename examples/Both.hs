@@ -8,7 +8,7 @@ import Data.Version
 import Data.Proxy
 
 main :: IO ()
-main = test1 >> test2 >> test3 >> test4 >> test5 >> test6 >> test7 >> test8 >> putStrLn "All worked"
+main = test1 >> test2 >> test3 >> test4 >> test5 >> test6 >> test7 >>  putStrLn "All worked"
 
 (===) :: (Show a, Eq a) => a -> a -> IO ()
 a === b = if a == b then pure () else fail $ "Mismatch, " ++ show a ++ " /= " ++ show b
@@ -186,7 +186,7 @@ test7 = do
 
 -- ---------------------------------------------------------------------
 -- Deal with incomplete types with no warning
-
+    {-
 data Foo8 = Foo8 {
   bar8 :: Int,
   baz8 :: Float
@@ -202,3 +202,4 @@ test8 = do
     quux.quux8 === "test"
     fails $ foo.quux8
     fails $ length $ show $ quux{bar8=1}
+    -}
