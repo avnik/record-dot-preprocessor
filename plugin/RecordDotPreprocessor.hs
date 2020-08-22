@@ -1,4 +1,4 @@
-{-# LANGUAGE RecordWildCards, ViewPatterns, NamedFieldPuns #-}
+{-# LANGUAGE RecordWildCards, ViewPatterns, NamedFieldPuns, TypeFamilies #-}
 {- HLINT ignore "Use camelCase" -}
 
 -- | Module containing the plugin.
@@ -7,12 +7,17 @@ module RecordDotPreprocessor(plugin) where
 import Data.Generics.Uniplate.Data
 import Data.List.Extra
 import Data.Tuple.Extra
+import Data.Maybe (listToMaybe)
+import Control.Applicative (Alternative(..))
+import Control.Monad (guard)
 import Compat
 import Bag
 import qualified GHC
 import qualified GhcPlugins as GHC
 import SrcLoc
 import TcEvidence
+import Debug.Trace
+import Outputable (pprTraceIt)
 
 
 ---------------------------------------------------------------------
@@ -35,6 +40,16 @@ setL l (L _ x) = L l x
 mod_records :: GHC.ModuleName
 mod_records = GHC.mkModuleName "GHC.Records.Extra"
 
+mod_identity :: GHC.ModuleName
+mod_identity = GHC.mkModuleName "Data.Functor.Identity"
+
+mod_maybe :: GHC.ModuleName
+mod_maybe = GHC.mkModuleName "Data.Maybe"
+
+-- Even if I postpone detecting C/Columnar, I wrote constants for it there
+mod_beam :: GHC.ModuleName
+mod_beam = GHC.mkModuleName "Database.Beam.Schema"
+
 var_HasField, var_hasField, var_getField, var_setField, var_dot :: GHC.RdrName
 var_HasField = GHC.mkRdrQual mod_records $ GHC.mkClsOcc "HasField"
 var_hasField = GHC.mkRdrUnqual $ GHC.mkVarOcc "hasField"
@@ -42,6 +57,17 @@ var_getField = GHC.mkRdrQual mod_records $ GHC.mkVarOcc "getField"
 var_setField = GHC.mkRdrQual mod_records $ GHC.mkVarOcc "setField"
 var_dot = GHC.mkRdrUnqual $ GHC.mkVarOcc "."
 
+var_Identity, var_runIdentity :: GHC.RdrName
+var_Identity = GHC.mkRdrQual mod_identity $ GHC.mkClsOcc "Identity"
+var_runIdentity = GHC.mkRdrQual mod_identity $ GHC.mkVarOcc "runIdentity"
+
+var_Maybe :: GHC.RdrName
+var_Maybe = GHC.mkRdrQual mod_maybe $ GHC.mkClsOcc "Maybe"
+
+var_Columnar, var_Nullable, var_PrimaryKey :: GHC.RdrName
+var_Columnar = GHC.mkRdrQual mod_beam $ GHC.mkClsOcc "Columnar"
+var_Nullable = GHC.mkRdrQual mod_beam $ GHC.mkClsOcc "Nullable"
+var_PrimaryKey = GHC.mkRdrQual mod_beam $ GHC.mkClsOcc "PrimaryKey"
 
 onModule :: HsModule GhcPs -> HsModule GhcPs
 onModule x = x { hsmodImports = onImports $ hsmodImports x
@@ -50,7 +76,7 @@ onModule x = x { hsmodImports = onImports $ hsmodImports x
 
 
 onImports :: [LImportDecl GhcPs] -> [LImportDecl GhcPs]
-onImports = (:) $ qualifiedImplicitImport mod_records
+onImports = (++) $ qualifiedImplicitImport <$> [mod_records, mod_maybe, mod_identity, mod_beam]
 
 
 {-
@@ -59,15 +85,83 @@ instance Z.HasField "name" (Company) (String) where hasField _r = (\_x -> _r{nam
 instance HasField "selector" Record Field where
     hasField r = (\x -> r{selector=x}, (name :: Record -> Field) r)
 -}
-instanceTemplate :: FieldOcc GhcPs -> HsType GhcPs -> HsType GhcPs -> InstDecl GhcPs
-instanceTemplate selector record field = ClsInstD noE $ ClsInstDecl noE (HsIB noE typ) (unitBag has) [] [] [] Nothing
+instanceTemplate :: FieldOcc GhcPs -> HsType GhcPs -> HsType GhcPs -> Maybe GHC.RdrName -> InstDecl GhcPs
+instanceTemplate selector record field tyVar = ClsInstD noE $ ClsInstDecl noE (HsIB noE typ) (unitBag has) [] [] [] Nothing
     where
-        typ = mkHsAppTys
+        typ = case (field, tyVar) of
+            ((HsAppTy _ a b), Just t) -> highOrder t
+            _ -> simple
+
+        simple = mkHsAppTys
             (noL (HsTyVar noE GHC.NotPromoted (noL var_HasField)))
             [noL (HsTyLit noE (HsStrTy GHC.NoSourceText (GHC.occNameFS $ GHC.occName $ unLoc $ rdrNameFieldOcc selector)))
             ,noL record
             ,noL field
             ]
+
+        highOrder :: GHC.RdrName -> LHsType GhcPs
+        highOrder t = pprTraceIt "high " $ mkHsAppTys 
+            (noL (HsTyVar noE GHC.NotPromoted (noL var_HasField)))
+            [noL (HsTyLit noE (HsStrTy GHC.NoSourceText (GHC.occNameFS $ GHC.occName $ unLoc $ rdrNameFieldOcc selector)))
+            ,recordTransformed record
+            ,(pprTraceIt "case" $ fieldTransformed t field) -- I keep debug traces for fields and final expression
+            ]
+
+        recordTransformed :: HsType GhcPs -> LHsType GhcPs 
+        recordTransformed rt = maybe (noL rt) template $ fst <$> unApplyType rt
+            where template r = mkHsAppTys (noL r) [noL $ HsTyVar noE GHC.NotPromoted (noL var_Identity)]
+
+        fieldTransformed :: GHC.RdrName -> HsType GhcPs -> LHsType GhcPs
+        fieldTransformed t ft = maybe (pprTraceIt "default " $ noL ft) template $ processPK <|> processNull <|> processType
+            where template tv = noL $ HsParTy noE tv
+                  processPK = do
+                      (ft0, _) <- unApplyType ft
+                      (l, r) <- unApplyType ft0
+                      tn <- getTypeName l
+                      guard $ tn `stringifyEq` "PrimaryKey"
+                      return $ mkHsAppTys (noL $ HsTyVar noE GHC.NotPromoted (noL var_PrimaryKey))
+                               [ noL r
+                               ,(noL $ HsTyVar noE GHC.NotPromoted (noL var_Identity))]
+                  processNull = do
+                      (ft0, r0) <- unApplyType ft
+                      (l, r) <- unApplyType ft0
+                      tn <- getTypeName l
+                      guard $ (tn `stringifyEq` "Columnar") || (tn `stringifyEq` "C")
+                      p <- unparenthise r
+                      (l1, r1) <- unApplyType p
+                      tn1 <- getTypeName l1
+                      guard $ tn1 `stringifyEq` "Nullable"
+                      return $ mkHsAppTy (noL $ HsTyVar noE GHC.NotPromoted (noL var_Maybe)) (noL r0)
+                  processType = do
+                      (ft0, r0) <- unApplyType ft
+                      (l, r) <- unApplyType ft0
+                      tn <- getTypeName (pprTraceIt "pt" l)
+                      guard $ (tn `stringifyEq` "Columnar") || (tn `stringifyEq` "C") 
+                      ft' <- getTypeName r0 -- (pprTraceIt "r0" r0) -- Kludge
+                      return $ (noL $ HsTyVar noE GHC.NotPromoted (noL (pprTraceIt "ft'" ft'))) 
+
+                  replaceTypeVar :: GHC.RdrName -> GHC.RdrName -> HsType GhcPs -> LHsType GhcPs
+                  replaceTypeVar t newt tvs = go (pprTraceIt "tvs" tvs)
+                      where go :: HsType GhcPs -> LHsType GhcPs  
+                            go next = case unApplyType next of
+                                                Just (l, r) | getTypeName l == Just t -> mkHsAppTy (noL $ HsTyVar noE GHC.NotPromoted (noL newt)) $ go r
+                                                Just (l, r) -> mkHsAppTy (noL l) $ go r
+                                                Nothing -> noL tvs
+
+                  stringifyEq :: GHC.RdrName -> String -> Bool
+                  stringifyEq a s = (GHC.occNameFS $  GHC.rdrNameOcc a) == GHC.mkFastString s
+
+        getTypeName :: HsType pass -> Maybe (IdP pass)
+        getTypeName (HsTyVar _ _ name) = Just $ unLoc name
+        getTypeName _ = Nothing
+
+        unparenthise :: HsType GhcPs -> Maybe (HsType GhcPs)
+        unparenthise (HsParTy _ p) = Just $ unLoc p
+        unparenthise _ = Nothing
+
+        unApplyType :: HsType GhcPs -> Maybe (HsType GhcPs, HsType GhcPs)
+        unApplyType (HsAppTy _ l r) = Just ((unLoc l), (unLoc r))
+        unApplyType _ = Nothing
 
         has :: LHsBindLR GhcPs GhcPs
         has = noL $ FunBind noE (noL var_hasField) (mg1 eqn) WpHole []
@@ -98,11 +192,40 @@ instanceTemplate selector record field = ClsInstD noE $ ClsInstDecl noE (HsIB no
 
 
 onDecl :: LHsDecl GhcPs -> [LHsDecl GhcPs]
-onDecl o@(L _ (GHC.TyClD _ x)) = o :
-    [ noL $ InstD noE $ instanceTemplate field (unLoc record) (unbang typ)
-    | let fields = nubOrdOn (\(_,_,x,_) -> GHC.occNameFS $ GHC.rdrNameOcc $ unLoc $ rdrNameFieldOcc x) $ getFields x
-    , (record, _, field, typ) <- fields]
+onDecl o@(L _ (GHC.TyClD _ x@DataDecl{ tcdTyVars = tyVars })) = o : inserts
+    where
+        inserts = [ noL $ InstD noE $ instanceTemplate field (unLoc record) (unbang typ) typParam
+                  | (record, _, field, typ) <- fields]
+        fields = nubOrdOn (\(_,_,x',_) -> GHC.occNameFS $ GHC.rdrNameOcc $ unLoc $ rdrNameFieldOcc x') $ getFields x
+        hasC = any isC $ (\(_,_,_,t) -> t) <$> fields
+
+        isC :: HsType GhcPs -> Bool
+        isC (HsAppTy _ b c) = True
+        isC _ = False
+        typParam = listToMaybe $ pprTraceIt "all" $ hsAllLTyVarNames' tyVars
 onDecl x = [descendBi onExp x]
+
+-- All variables (borrowed from GHC master)
+hsAllLTyVarNames' :: LHsQTyVars GhcPs -> [GHC.RdrName]
+hsAllLTyVarNames' (HsQTvs { hsq_ext = kvs
+                          , hsq_explicit = tvs })
+                 = hsLTyVarName <$> tvs
+
+-- Debug tool -- like pprTraceIt, but show HsType constructor name
+pprTraceTypeOf :: String -> HsType GhcPs -> HsType GhcPs
+pprTraceTypeOf s a = pprTraceIt (s ++ " " ++ guessHsType a) a
+
+-- Debug tool, explain what constructir whe have
+guessHsType :: HsType GhcPs -> String
+guessHsType (HsQualTy _ _ _) = "HsQualTy"
+guessHsType (HsTyVar _ _ _) = "HsTyVar"
+guessHsType (HsAppTy _ _ _) = "HsAppTy"
+guessHsType (HsFunTy _ _ _) = "HsFunTy"
+guessHsType (HsAppKindTy _ _ _) = "HsAppKindTy"
+guessHsType (HsTupleTy _ _ _) = "HsTupleTy"
+guessHsType (HsListTy _ _) = "HsListTy"
+guessHsType (HsSumTy _ _) = "HsSumTy"
+guessHsType _ = "unknown, I am too lazy "
 
 unbang :: HsType GhcPs -> HsType GhcPs
 unbang (HsBangTy _ _ x) = unLoc x
