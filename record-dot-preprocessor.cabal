@@ -63,13 +63,17 @@ test-suite record-dot-preprocessor-test
     type: exitcode-stdio-1.0
     main-is: Test.hs
     hs-source-dirs: preprocessor, test
-    ghc-options: -main-is Test.main
+    ghc-options:
+        -main-is Test.main
+        -plugin-package record-dot-preprocessor
+        -ddump-parsed-ast
 
     build-depends:
         base == 4.*,
         extra,
         record-hasfield,
-        filepath
+        filepath,
+        beam-core
     if impl(ghc >= 8.6)
         build-depends:
             record-dot-preprocessor
