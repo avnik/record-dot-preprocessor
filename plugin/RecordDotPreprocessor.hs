@@ -48,7 +48,7 @@ mod_maybe = GHC.mkModuleName "Data.Maybe"
 
 -- Even if I postpone detecting C/Columnar, I wrote constants for it there
 mod_beam :: GHC.ModuleName
-mod_beam = GHC.mkModuleName "Database.Beam.Schema"
+mod_beam = GHC.mkModuleName "Database.Beam"
 
 var_HasField, var_hasField, var_getField, var_setField, var_dot :: GHC.RdrName
 var_HasField = GHC.mkRdrQual mod_records $ GHC.mkClsOcc "HasField"
@@ -76,7 +76,7 @@ onModule x = x { hsmodImports = onImports $ hsmodImports x
 
 
 onImports :: [LImportDecl GhcPs] -> [LImportDecl GhcPs]
-onImports = (++) $ qualifiedImplicitImport <$> [mod_records, mod_maybe, mod_identity, mod_beam]
+onImports = (++) $ qualifiedImplicitImport <$> [mod_records, mod_maybe, mod_identity]
 
 
 {-
@@ -88,6 +88,9 @@ instance HasField "selector" Record Field where
 instanceTemplate :: FieldOcc GhcPs -> HsType GhcPs -> HsType GhcPs -> Maybe GHC.RdrName -> InstDecl GhcPs
 instanceTemplate selector record field tyVar = ClsInstD noE $ ClsInstDecl noE (HsIB noE typ) (unitBag has) [] [] [] Nothing
     where
+        -- If we have given variable -- go "highOrder" path, otherwise classic one
+        -- (I actually think that default values on new algoritm will work with plain old dara structs, 
+        -- but keep old codepath for simplicity)
         typ = case (field, tyVar) of
             ((HsAppTy _ a b), Just t) -> highOrder t
             _ -> simple -- "simple" is an old implementation, with no type parameter
@@ -193,11 +196,6 @@ onDecl o@(L _ (GHC.TyClD _ x@DataDecl{ tcdTyVars = tyVars })) = o : inserts
         inserts = [ noL $ InstD noE $ instanceTemplate field (unLoc record) (unbang typ) typParam
                   | (record, _, field, typ) <- fields]
         fields = nubOrdOn (\(_,_,x',_) -> GHC.occNameFS $ GHC.rdrNameOcc $ unLoc $ rdrNameFieldOcc x') $ getFields x
-        hasC = any isC $ (\(_,_,_,t) -> t) <$> fields
-
-        isC :: HsType GhcPs -> Bool
-        isC (HsAppTy _ b c) = True
-        isC _ = False
         typParam = listToMaybe $ pprTraceIt "all" $ hsAllLTyVarNames' tyVars
 onDecl x = [descendBi onExp x]
 

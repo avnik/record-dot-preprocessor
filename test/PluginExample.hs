@@ -21,11 +21,6 @@ main = pure ()
 {-# OPTIONS_GHC -Werror -Wall -Wno-type-defaults -Wno-partial-type-signatures -Wincomplete-record-updates -Wno-unused-top-binds #-}
 {-# LANGUAGE PartialTypeSignatures, GADTs, StandaloneDeriving, KindSignatures #-}
 module PluginExample where
-import Database.Beam
-import GHC.Records.Extra
-import Data.Functor.Identity (Identity(..))
-import Data.Maybe (Maybe)
 #include "../examples/Both.hs"
-#include "../examples/Beam.hs"
 
 #endif
