@@ -90,7 +90,7 @@ instanceTemplate selector record field tyVar = ClsInstD noE $ ClsInstDecl noE (H
     where
         typ = case (field, tyVar) of
             ((HsAppTy _ a b), Just t) -> highOrder t
-            _ -> simple
+            _ -> simple -- "simple" is an old implementation, with no type parameter
 
         simple = mkHsAppTys
             (noL (HsTyVar noE GHC.NotPromoted (noL var_HasField)))
@@ -114,39 +114,35 @@ instanceTemplate selector record field tyVar = ClsInstD noE $ ClsInstDecl noE (H
         fieldTransformed :: GHC.RdrName -> HsType GhcPs -> LHsType GhcPs
         fieldTransformed t ft = maybe (pprTraceIt "default " $ noL ft) template $ processPK <|> processNull <|> processType
             where template tv = noL $ HsParTy noE tv
+                  -- set of combinator' parsers for 3 different cases:
+                  -- [ ["PrimaryKey", typeVar, ...], _ ] ->  ...
                   processPK = do
-                      (ft0, _) <- unApplyType ft
-                      (l, r) <- unApplyType ft0
-                      tn <- getTypeName l
+                      (pkClause, _) <- unApplyType ft
+                      (possiblePK, typeVar) <- unApplyType pkClause
+                      tn <- getTypeName possiblePK
                       guard $ tn `stringifyEq` "PrimaryKey"
                       return $ mkHsAppTys (noL $ HsTyVar noE GHC.NotPromoted (noL var_PrimaryKey))
-                               [ noL r
+                               [ noL typeVar
                                ,(noL $ HsTyVar noE GHC.NotPromoted (noL var_Identity))]
+                  -- [ ["C", ["Nullable", f]], targetTypeVar]
                   processNull = do
-                      (ft0, r0) <- unApplyType ft
-                      (l, r) <- unApplyType ft0
-                      tn <- getTypeName l
+                      (columnarClause, targetTypeVar) <- unApplyType ft
+                      (columnar, nullableParClause) <- unApplyType columnarClause
+                      tn <- getTypeName columnar
                       guard $ (tn `stringifyEq` "Columnar") || (tn `stringifyEq` "C")
-                      p <- unparenthise r
-                      (l1, r1) <- unApplyType p
-                      tn1 <- getTypeName l1
+                      nullableClause <- unparenthise nullableParClause
+                      (nullable, _) <- unApplyType nullableClause
+                      tn1 <- getTypeName nullable
                       guard $ tn1 `stringifyEq` "Nullable"
-                      return $ mkHsAppTy (noL $ HsTyVar noE GHC.NotPromoted (noL var_Maybe)) (noL r0)
+                      return $ mkHsAppTy (noL $ HsTyVar noE GHC.NotPromoted (noL var_Maybe)) (noL targetTypeVar)
+                  -- [ [ "C", ...], targetTypeVar]
                   processType = do
-                      (ft0, r0) <- unApplyType ft
-                      (l, r) <- unApplyType ft0
-                      tn <- getTypeName (pprTraceIt "pt" l)
+                      (columnarClause, targetTypeVar) <- unApplyType ft
+                      (columnar, _) <- unApplyType columnarClause
+                      tn <- getTypeName columnar
                       guard $ (tn `stringifyEq` "Columnar") || (tn `stringifyEq` "C") 
-                      ft' <- getTypeName r0 -- (pprTraceIt "r0" r0) -- Kludge
-                      return $ (noL $ HsTyVar noE GHC.NotPromoted (noL (pprTraceIt "ft'" ft'))) 
-
-                  replaceTypeVar :: GHC.RdrName -> GHC.RdrName -> HsType GhcPs -> LHsType GhcPs
-                  replaceTypeVar t newt tvs = go (pprTraceIt "tvs" tvs)
-                      where go :: HsType GhcPs -> LHsType GhcPs  
-                            go next = case unApplyType next of
-                                                Just (l, r) | getTypeName l == Just t -> mkHsAppTy (noL $ HsTyVar noE GHC.NotPromoted (noL newt)) $ go r
-                                                Just (l, r) -> mkHsAppTy (noL l) $ go r
-                                                Nothing -> noL tvs
+                      targetTypeVarName <- getTypeName targetTypeVar -- Kludge
+                      return $ (noL $ HsTyVar noE GHC.NotPromoted (noL targetTypeVarName))
 
                   stringifyEq :: GHC.RdrName -> String -> Bool
                   stringifyEq a s = (GHC.occNameFS $  GHC.rdrNameOcc a) == GHC.mkFastString s
